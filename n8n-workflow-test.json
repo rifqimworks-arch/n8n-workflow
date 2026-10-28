@@ -1,0 +1,848 @@
+{
+  "name": "Automat from jira to create script until have to telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "events": [
+          "jira:issue_created"
+        ],
+        "additionalFields": {}
+      },
+      "id": "d6b570e4-035c-4b58-9fee-37f48c07967a",
+      "name": "Jira Trigger",
+      "type": "n8n-nodes-base.jiraTrigger",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        784
+      ],
+      "webhookId": "jira-webhook-001",
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "VW9E9mKH7Y5KJAEp",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "issueKey": "KAN-1",
+        "additionalFields": {}
+      },
+      "id": "2cf6df85-ad73-4d59-9d80-f807f6685d5f",
+      "name": "Jira: Get Issue Detail",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        -128,
+        784
+      ],
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "VW9E9mKH7Y5KJAEp",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Kamu adalah analis tiket Jira yang berpengalaman. Analisa tiket berikut dan berikan output terstruktur.\n\n**Data Tiket:**\n- Issue Key: {{ $json.key }}\n- Judul: {{ $json.fields.summary }}\n- Deskripsi: {{ $json.fields.description ?? 'Tidak ada deskripsi' }}\n- Status: {{ $json.fields.status.name }}\n- Prioritas: {{ $json.fields.priority.name }}\n- Tipe Issue: {{ $json.fields.issuetype.name }}\n- Assignee: {{ $json.fields.assignee?.displayName ?? 'Unassigned' }}\n- Reporter: {{ $json.fields.reporter?.displayName ?? 'Unknown' }}\n- Dibuat: {{ $json.fields.created }}\n- Label: {{ $json.fields.labels.join(', ') || 'Tidak ada label' }}\n\nBerikan analisa dalam format JSON berikut (HANYA output JSON, tanpa penjelasan tambahan):\n{\n  \"kategori\": \"Bug | Feature Request | Improvement | Task | Support\",\n  \"tingkat_urgensi\": \"Sangat Tinggi | Tinggi | Sedang | Rendah\",\n  \"estimasi_kompleksitas\": \"Simple | Medium | Complex\",\n  \"ringkasan\": \"Ringkasan singkat 1-2 kalimat tentang tiket ini\",\n  \"rekomendasi_aksi\": \"Langkah konkret yang harus dilakukan\",\n  \"potensi_dampak\": \"Dampak jika tidak diselesaikan\",\n  \"skor_prioritas\": \"1-10\"\n}",
+        "options": {
+          "systemMessage": "Kamu adalah asisten analis tiket yang membantu tim engineering memahami dan memprioritaskan pekerjaan. Selalu jawab dalam Bahasa Indonesia dan kembalikan HANYA valid JSON tanpa markdown code block."
+        }
+      },
+      "id": "209eb38b-5cc7-46fa-85cb-ac6b9f6dad68",
+      "name": "AI Agent: Analisa Tiket",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        64,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Jira: Get Issue Detail').item.json.key }}"
+      },
+      "id": "4de2d265-35d0-4c49-ad70-4d0f889344ad",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.2,
+      "position": [
+        160,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ambil data dari node-node sebelumnya\nconst jiraData = $('Jira: Get Issue Detail').item.json;\nconst aiRawOutput = $('AI Agent: Analisa Tiket').item.json.text;\n\n// Parse output AI (bersihkan jika ada markdown)\nlet aiAnalysis = {};\ntry {\n  const cleaned = aiRawOutput\n    .replace(/```json\\n?/gi, '')\n    .replace(/```\\n?/gi, '')\n    .trim();\n  aiAnalysis = JSON.parse(cleaned);\n} catch (e) {\n  aiAnalysis = {\n    kategori: 'Tidak Teridentifikasi',\n    tingkat_urgensi: 'Sedang',\n    estimasi_kompleksitas: 'Medium',\n    ringkasan: (aiRawOutput || '').substring(0, 200),\n    rekomendasi_aksi: 'Periksa tiket secara manual',\n    potensi_dampak: 'Tidak diketahui',\n    skor_prioritas: '5'\n  };\n}\n\n// Format tanggal\nconst formatDate = (dateStr) => {\n  if (!dateStr) return '-';\n  return new Date(dateStr).toLocaleString('id-ID', {\n    day: '2-digit', month: 'long', year: 'numeric',\n    hour: '2-digit', minute: '2-digit'\n  });\n};\n\n// Susun baris data untuk spreadsheet\nconst row = {\n  issue_key: jiraData.key ?? '-',\n  judul: jiraData.fields?.summary ?? '-',\n  tipe_issue: jiraData.fields?.issuetype?.name ?? '-',\n  status: jiraData.fields?.status?.name ?? '-',\n  prioritas_jira: jiraData.fields?.priority?.name ?? '-',\n  assignee: jiraData.fields?.assignee?.displayName ?? 'Unassigned',\n  reporter: jiraData.fields?.reporter?.displayName ?? '-',\n  label: (jiraData.fields?.labels ?? []).join(', ') || '-',\n  tanggal_dibuat: formatDate(jiraData.fields?.created),\n  tanggal_diupdate: formatDate(jiraData.fields?.updated),\n  kategori_ai: aiAnalysis.kategori ?? '-',\n  tingkat_urgensi_ai: aiAnalysis.tingkat_urgensi ?? '-',\n  kompleksitas_ai: aiAnalysis.estimasi_kompleksitas ?? '-',\n  skor_prioritas_ai: aiAnalysis.skor_prioritas ?? '-',\n  ringkasan_ai: aiAnalysis.ringkasan ?? '-',\n  rekomendasi_ai: aiAnalysis.rekomendasi_aksi ?? '-',\n  potensi_dampak_ai: aiAnalysis.potensi_dampak ?? '-',\n  waktu_proses: formatDate(new Date().toISOString())\n};\n\nreturn [{ json: row }];"
+      },
+      "id": "fc48c934-e9ff-40f6-b59a-d6f70001cedc",
+      "name": "Code: Format Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        368,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toFile",
+        "fileFormat": "xlsx",
+        "options": {
+          "fileName": "=Jira_Report_{{ $('Jira: Get Issue Detail').item.json.key }}_{{ $now.format('yyyyMMdd_HHmmss') }}.xlsx",
+          "headerRow": true,
+          "sheetName": "Jira AI Report"
+        }
+      },
+      "id": "bc3b3e04-15eb-4399-82db-795897c153c9",
+      "name": "Spreadsheet: Buat File XLSX",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 2,
+      "position": [
+        560,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "name": "=data test - n8n",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive",
+          "cachedResultUrl": "https://drive.google.com/drive/my-drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1bgKJhrQyhoi1hooIavnYyDApeGNPioW7",
+          "mode": "list",
+          "cachedResultName": "n8n-test",
+          "cachedResultUrl": "https://drive.google.com/drive/folders/1bgKJhrQyhoi1hooIavnYyDApeGNPioW7"
+        },
+        "options": {}
+      },
+      "id": "ceed97c6-8dcf-43e2-92ca-92c4af785ed3",
+      "name": "Google Drive: Upload File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        752,
+        784
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "uNsIMUQc9tO5RG6C",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "check-gdrive-id",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c517396b-ed0e-4064-9677-b3f99e88ebaf",
+      "name": "IF: Upload Sukses?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        944,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "5749225200",
+        "text": "=✅ *Laporan Jira Berhasil Dibuat*\n\n📋 *Detail Tiket:*\n• Issue Key: `{{ $('Jira: Get Issue Detail').item.json.key }}`\n• Judul: {{ $('Jira: Get Issue Detail').item.json.fields.summary }}\n• Status: {{ $('Jira: Get Issue Detail').item.json.fields.status.name }}\n• Prioritas: {{ $('Jira: Get Issue Detail').item.json.fields.priority.name }}\n• Assignee: {{ $('Jira: Get Issue Detail').item.json.fields.assignee?.displayName ?? 'Unassigned' }}\n\n🤖 *Analisa AI:*\n• Kategori: {{ $('Code: Format Data').item.json.kategori_ai }}\n• Urgensi: {{ $('Code: Format Data').item.json.tingkat_urgensi_ai }}\n• Skor Prioritas: {{ $('Code: Format Data').item.json.skor_prioritas_ai }}/10\n• Ringkasan: {{ $('Code: Format Data').item.json.ringkasan_ai }}\n\n📊 *File Spreadsheet:*\n• Nama: {{ $('Google Drive: Upload File').item.json.name }}\n• 🔗 [Buka di Google Drive]({{ $('Google Drive: Upload File').item.json.webViewLink }})\n\n🕐 Diproses: {{ $now.format('dd MMMM yyyy, HH:mm') }} WIB",
+        "additionalFields": {
+          "disable_notification": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "e9c4d1c1-f6a2-4748-9cd1-ece79d0da1bd",
+      "name": "Telegram: Notifikasi Sukses",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1248,
+        688
+      ],
+      "webhookId": "a52ca99f-af1a-4f70-bd8c-cb8bee789250",
+      "credentials": {
+        "telegramApi": {
+          "id": "YcICW6aLKVnxI7ZS",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "5749225200",
+        "text": "=❌ *Gagal Upload Laporan Jira*\n\n📋 *Detail Tiket:*\n• Issue Key: `{{ $('Jira: Get Issue Detail').item.json.key }}`\n• Judul: {{ $('Jira: Get Issue Detail').item.json.fields.summary }}\n\n⚠️ *Keterangan Error:*\nProses upload ke Google Drive gagal. Silakan periksa:\n1. Kredensial Google Drive masih valid\n2. Folder tujuan tersedia dan memiliki akses\n3. Ukuran file tidak melebihi batas\n\n🕐 Waktu: {{ $now.format('dd MMMM yyyy, HH:mm') }} WIB\n\n_Silakan cek log n8n untuk detail error lebih lanjut._",
+        "additionalFields": {
+          "disable_notification": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "24e4e702-81a1-4ccb-a81e-492ea92994bf",
+      "name": "Telegram: Notifikasi Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1248,
+        944
+      ],
+      "webhookId": "dd4d0f34-a849-4a82-a300-82cd63427fc5",
+      "credentials": {
+        "telegramApi": {
+          "id": "YcICW6aLKVnxI7ZS",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "cohere/north-mini-code:free",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        1024
+      ],
+      "id": "da6431ab-cff1-47a3-94a9-f225d3c55e02",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "P5DZYSzovvIMGYDL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Buatkan script playwright BDD berdasarkan deskripsi task Jira berikut: {{ $json.fields.description }}\n",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        176,
+        224
+      ],
+      "id": "342510cd-e9eb-4c60-9ab9-6c66d9fc4527",
+      "name": "AI Agent",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        176,
+        416
+      ],
+      "id": "6e5356ca-f1b6-4a7c-af0d-e8c6d0d5885a",
+      "name": "OpenRouter Chat Model1",
+      "credentials": {
+        "openRouterApi": {
+          "id": "P5DZYSzovvIMGYDL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -192,
+        224
+      ],
+      "id": "2f8a959a-6e77-419a-9e68-cd577be83243",
+      "name": "When chat message received",
+      "webhookId": "8ac904fc-ef95-46cd-9076-3e669c0b81d3"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "issueKey": "KAN-1",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        -16,
+        224
+      ],
+      "id": "c420719c-eaa0-4e71-b182-8123403652d4",
+      "name": "Get an issue",
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "VW9E9mKH7Y5KJAEp",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "createFromText",
+        "content": "={{ $('AI Agent').item.json.output }}\n",
+        "name": "={{ 'Task_Jira_' + $now.format('yyyyMMdd_HHmmss') + '_' + Math.floor(Math.random() * 1000) + '.txt' }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive",
+          "cachedResultUrl": "https://drive.google.com/drive/my-drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1bgKJhrQyhoi1hooIavnYyDApeGNPioW7",
+          "mode": "list",
+          "cachedResultName": "n8n-test",
+          "cachedResultUrl": "https://drive.google.com/drive/folders/1bgKJhrQyhoi1hooIavnYyDApeGNPioW7"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        496,
+        224
+      ],
+      "id": "bec01f6b-aab5-4a50-bdf5-be5a97b7206d",
+      "name": "Create file from text",
+      "alwaysOutputData": false,
+      "executeOnce": false,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "uNsIMUQc9tO5RG6C",
+          "name": "Google Drive account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "check-gdrive-id",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a3a28fee-73ae-40fd-9b52-c53893c25b73",
+      "name": "IF: Upload Sukses?1",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        704,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "content": "Project sucsess phase 2",
+        "height": 80,
+        "width": 192,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -448,
+        240
+      ],
+      "typeVersion": 1,
+      "id": "c46a92e1-ed0d-45d6-8340-26577f5b0e75",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "Project error phase 1",
+        "height": 80,
+        "width": 176,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -560,
+        800
+      ],
+      "typeVersion": 1,
+      "id": "73aaed42-9b70-4811-8515-d73398e4d38e",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "chatId": "5749225200",
+        "text": "Laporan, tiket jira berhasil dijalankan",
+        "additionalFields": {
+          "disable_notification": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "67edfd3c-0536-4d2f-84c7-cf798d404497",
+      "name": "Notifikasi Sukses",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        928,
+        112
+      ],
+      "webhookId": "a52ca99f-af1a-4f70-bd8c-cb8bee789250",
+      "credentials": {
+        "telegramApi": {
+          "id": "YcICW6aLKVnxI7ZS",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "5749225200",
+        "text": "Laporan, Task Jira Gagal Upload",
+        "additionalFields": {
+          "disable_notification": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "a9e0923f-145b-4aea-94d9-422aa16a620e",
+      "name": "Notifikasi Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        928,
+        384
+      ],
+      "webhookId": "dd4d0f34-a849-4a82-a300-82cd63427fc5",
+      "credentials": {
+        "telegramApi": {
+          "id": "YcICW6aLKVnxI7ZS",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Buatkan script playwright BDD berdasarkan deskripsi task Jira berikut: {{ $json.fields.description }}\n",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        16,
+        -368
+      ],
+      "id": "0ad113b1-28b8-4c85-aee2-7fbe2ce149ac",
+      "name": "AI Agent1",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        16,
+        -176
+      ],
+      "id": "6279ae47-2033-4a16-aa08-58857f65470c",
+      "name": "OpenRouter Chat Model2",
+      "credentials": {
+        "openRouterApi": {
+          "id": "P5DZYSzovvIMGYDL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "D:\\Project\\n8n-jira-playwright\\playwright-tests",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        624,
+        -368
+      ],
+      "id": "9b611536-339c-4108-bfe2-5c2ed82c0063",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "chatId": "5749225200",
+        "text": "Laporan, tiket jira berhasil dijalankan",
+        "additionalFields": {
+          "disable_notification": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "977dd219-037e-495d-82af-a987a91d9295",
+      "name": "Notifikasi Sukses1",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        832,
+        -368
+      ],
+      "webhookId": "a52ca99f-af1a-4f70-bd8c-cb8bee789250",
+      "credentials": {
+        "telegramApi": {
+          "id": "YcICW6aLKVnxI7ZS",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        384,
+        -368
+      ],
+      "id": "8ee4dd9c-38c7-4e47-9ea1-e152e97dbce3",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ed09dc8c-a851-4e0b-917d-d7983b89bd39",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -240,
+        -368
+      ],
+      "id": "b06a8fa8-ad9c-45c4-98f8-9b975964b417",
+      "name": "Webhook",
+      "webhookId": "ed09dc8c-a851-4e0b-917d-d7983b89bd39"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Jira Trigger": {
+      "main": [
+        [
+          {
+            "node": "Jira: Get Issue Detail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jira: Get Issue Detail": {
+      "main": [
+        [
+          {
+            "node": "AI Agent: Analisa Tiket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent: Analisa Tiket": {
+      "main": [
+        [
+          {
+            "node": "Code: Format Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent: Analisa Tiket",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Format Data": {
+      "main": [
+        [
+          {
+            "node": "Spreadsheet: Buat File XLSX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Spreadsheet: Buat File XLSX": {
+      "main": [
+        [
+          {
+            "node": "Google Drive: Upload File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive: Upload File": {
+      "main": [
+        [
+          {
+            "node": "IF: Upload Sukses?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Upload Sukses?": {
+      "main": [
+        [
+          {
+            "node": "Telegram: Notifikasi Sukses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram: Notifikasi Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent: Analisa Tiket",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Get an issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Create file from text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get an issue": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create file from text": {
+      "main": [
+        [
+          {
+            "node": "IF: Upload Sukses?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Upload Sukses?1": {
+      "main": [
+        [
+          {
+            "node": "Notifikasi Sukses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notifikasi Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Notifikasi Sukses1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "1e8a7e1f-beec-4ebb-9b4c-0ebef323600a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ce2ba4f1a62a78f33de3d58d1b013e667f18aab5d804d27487e3d8c9b45c3133"
+  },
+  "nodeGroups": [],
+  "id": "hUuie7paGRylJ4hd",
+  "tags": [
+    {
+      "updatedAt": "2026-06-04T11:27:54.558Z",
+      "createdAt": "2026-06-04T11:27:54.558Z",
+      "id": "4AB6iaELVivWFv1e",
+      "name": "Jira"
+    },
+    {
+      "updatedAt": "2026-06-04T11:27:54.531Z",
+      "createdAt": "2026-06-04T11:27:54.531Z",
+      "id": "6ooUxjAOmHM3m1hM",
+      "name": "Automation"
+    },
+    {
+      "updatedAt": "2026-06-04T11:27:54.521Z",
+      "createdAt": "2026-06-04T11:27:54.521Z",
+      "id": "yNijih9VuXJpmoYp",
+      "name": "AI Agent"
+    }
+  ]
+}
